@@ -1,0 +1,6 @@
+*.sw?
+*.o
+*.so
+lib/*
+bin/*
+*.mat
