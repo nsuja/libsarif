@@ -134,6 +134,7 @@ int sarif_range_compression(double complex *out, ERS_Raw_Parser_Data_Patch *in, 
 			out[j + (in->az_pos + i) * params->n_valid_samples] = corr_aux_line[j]/params->ra_fft_len;
 		}
 		//printf("\n");
+
 		//memcpy(out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
 
 		//exit(0);
@@ -157,4 +158,45 @@ int sarif_range_compression(double complex *out, ERS_Raw_Parser_Data_Patch *in, 
 	fftw_destroy_plan(p_backward);
 
 	return 0;
+}
+
+double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Algo algo, ERS_Raw_Parser_Params *params)
+{
+	double complex *sum_az;
+	double *avg_phase_change;
+	double avg_phase_change_mean = 0;
+	double fc = NAN; //centroid
+	if(!in || !params) {
+		fprintf(stderr, "%s:: Invalid arguments %p %p", __func__, in, params);
+		return fc;
+	}
+	if(algo >= SARIF_DOPPLER_CENTROID_ALGO_N) {
+		fprintf(stderr, "%s:: Invalid algorithm %d", __func__, algo);
+		return fc;
+	}
+
+	if(algo != SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE) {
+		fprintf(stderr, "%s:: Algorithm %d is not supported yet", __func__, algo);
+		return fc;
+	}
+
+	sum_az = calloc(1, sizeof(double complex) * params->n_valid_samples);
+	avg_phase_change = calloc(1, sizeof(double) * params->n_valid_samples);
+
+	for(int i = 1; i < params->fft_lines; i++) {
+		for(int j = 0; j < params->n_valid_samples; j++) {
+			sum_az[j] += in[j + (i)*params->n_valid_samples] * conj(in[j + (i-1)*params->n_valid_samples]);
+		}
+	}
+	for(int j = 0; j < params->n_valid_samples; j++) {
+		avg_phase_change[j] = carg(sum_az[j]);
+		avg_phase_change_mean += avg_phase_change[j];
+	}
+	avg_phase_change_mean /= (double)params->n_valid_samples;
+	fc = avg_phase_change_mean*params->prf/2.0/M_PI;
+
+	free(avg_phase_change);
+	free(sum_az);
+
+	return fc;
 }

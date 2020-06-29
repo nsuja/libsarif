@@ -75,14 +75,14 @@ int main(int argc, char **argv)
 	ctx = ers_raw_parser_alloc(g_input_ldr, g_input_raw);
 
 	if(ers_raw_parser_get_params_from_file(ctx, &params)) {
-		fprintf(stderr, "%s:: ers_raw_parser_get_params_from_file(%s)", __func__, g_input_ldr);
+		fprintf(stderr, "%s:: ers_raw_parser_get_params_from_file(%s)\n", __func__, g_input_ldr);
 		return EXIT_FAILURE;
 	}
 
 	log_ers_params(&params);
 
 	if(ers_raw_parser_get_raw_data_from_file(ctx, &data)) {
-		fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)", __func__, g_input_raw);
+		fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)\n", __func__, g_input_raw);
 		return EXIT_FAILURE;
 	}
 
@@ -93,6 +93,15 @@ int main(int argc, char **argv)
 
 	double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
 	sarif_range_compression(processed, data, &params, f_conj_range_chirp);
+
+	double fc;
+	fc = sarif_calc_doppler_centroid(processed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
+	if(fc == NAN) {
+		fprintf(stderr, "%s:: sarif_calc_doppler_centroid(%p, %d, %p) error!", __func__, data, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
+		return EXIT_FAILURE;
+	} else {
+		fprintf(stdout, "Doppler center: %f Hz\n", fc);
+	}
 
 	ers_raw_parser_data_patch_free(data);
 
