@@ -86,13 +86,17 @@ int main(int argc, char **argv)
 		return EXIT_FAILURE;
 	}
 
-	double complex *f_conj_range_chirp;
+	Sarif_Ctx *sarif_ctx;
+
+	sarif_ctx = sarif_ctx_alloc(&params);
+
+	double complex *f_conj_range_chirp, *f_conj_az_chirp;
 	sarif_make_range_chirp(&params, &f_conj_range_chirp);
 
 	sarif_remove_mean(data);
 
 	double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
-	sarif_range_compression(processed, data, &params, f_conj_range_chirp);
+	sarif_range_compression(processed, data, &params, f_conj_range_chirp, 0);
 
 	double fc;
 	fc = sarif_calc_doppler_centroid(processed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
@@ -102,6 +106,20 @@ int main(int argc, char **argv)
 	} else {
 		fprintf(stdout, "Doppler center: %f Hz\n", fc);
 	}
+
+	if(sarif_set_doppler_centroid(sarif_ctx, fc)) {
+		fprintf(stderr, "%s:: Error: sarif_set_doppler_centroid(%p, %f)", __func__, sarif_ctx, fc);
+		return EXIT_FAILURE;
+	}
+
+	if(sarif_make_azimuth_chirp(sarif_ctx)) {
+		fprintf(stderr, "%s:: Error: sarif_make_azimuth_chirp(%p)", __func__, sarif_ctx);
+		return EXIT_FAILURE;
+	}
+
+	double complex *out = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
+
+	//sarif_azimuth_compression(out, processed, &params, NULL, fc, 1);
 
 	ers_raw_parser_data_patch_free(data);
 
