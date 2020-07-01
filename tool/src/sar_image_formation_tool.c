@@ -119,7 +119,9 @@ int main(int argc, char **argv)
 
 	double complex *out = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
 
-	//sarif_azimuth_compression(out, processed, &params, NULL, fc, 1);
+	sarif_make_rcmc_offset_matrix(sarif_ctx);
+
+	sarif_azimuth_compression(sarif_ctx, out, processed, 1);
 
 	ers_raw_parser_data_patch_free(data);
 
