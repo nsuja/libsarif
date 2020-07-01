@@ -355,10 +355,10 @@ double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Al
 	return fc;
 }
 
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex *out, double complex *in, int descale_range)
+int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in, int descale_range)
 {
 	ERS_Raw_Parser_Params *params;
-	double complex *f_in;
+	double complex *f_in, *f_out;
 	double complex *aux_line;
 	double complex *f_aux_line;
 	double complex *f_corr_aux_line;
@@ -377,6 +377,7 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex *out, double comple
 	params = &ctx->params;
 
 	f_in =  calloc(1, sizeof(double complex) * params->fft_lines * params->n_valid_samples);
+	f_out =  calloc(1, sizeof(double complex) * params->fft_lines * params->n_valid_samples);
 
 	aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
 	f_aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
@@ -390,7 +391,6 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex *out, double comple
 	//XXX TODO FIXME Change azimuth and range orientation, there are more operations in az dimension and vectors have to be manually transposed or try with the advanced interface
 
 	for(int i = 0; i < params->n_valid_samples; i++) {
-		//Copy range values
 		//printf("%s:: IN\n", __func__);
 		for(int j = 0; j < params->fft_lines; j++) {
 			if(descale_range)
@@ -427,28 +427,38 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex *out, double comple
 				}
 			}
 
+			f_out[i + j*params->n_valid_samples] = f_in[i + j*params->n_valid_samples] * conj(*(ctx->f_az_chirp[i]+j)); //XXX NOTE1
 			//f_corr_aux_line[j] = f_in[j] * conj((*(ctx->f_az_chirp[i]+j)); //XXX NOTE1
 			//printf("[%d](%g+j%g), ", j, creal(f_corr_aux_line[j]), cimag(f_corr_aux_line[j]));
 		}
 		//printf("\n");
 	}
-		exit(0);
 
-//		fftw_execute(p_backward);
-//		//if(i == 0) {
-//		//printf("IF\n");
-//		//for(int j = 0; j < range; j++) {
-//		//printf("[%d](%g+j%g), ", j, creal(corr_aux_line[j])/azimuth, cimag(corr_aux_line[j])/azimuth);
-//		//}
-//		//printf("\n");
-//		//}
-//		//printf("Shifted\n");
-//		for(int j = 0; j < azimuth; j++) {
-//			int dst_j = (j + azimuth/2) % azimuth;
-//			out[i+range*dst_j] = corr_aux_line[j] / azimuth;
-//			//printf("[%d](%g+j%g), ", dst_j, creal(out[i+range*dst_j]), cimag(out[i+range*dst_j]));
-//		}
-//		//printf("\n");
+	for(int i = 0; i < params->n_valid_samples; i++) {
+		//printf("%s:: IN\n", __func__);
+		for(int j = 0; j < params->fft_lines; j++) {
+			f_corr_aux_line[j] = f_out[i + j*params->n_valid_samples];
+			//printf("[%d](%g+j%g), ", j, creal(aux_line[j]), cimag(aux_line[j]));
+		}
+		//printf("\n");
+
+		fftw_execute(p_backward);
+		if(i == 0) {
+			printf("IF\n");
+			for(int j = 0; j < params->fft_lines; j++) {
+				printf("[%d](%g+j%g), ", j, creal(corr_aux_line[j])/params->fft_lines, cimag(corr_aux_line[j])/params->fft_lines);
+			}
+			printf("\n");
+		}
+		for(int j = 0; j < params->fft_lines; j++) {
+			f_out[i + j*params->n_valid_samples] = corr_aux_line[j]/params->fft_lines;
+			//printf("[%d](%g+j%g), ", j, creal(aux_line[j]), cimag(aux_line[j]));
+		}
+	}
+
+	*out = f_out;
+
+	free(f_in);
 	free(aux_line);
 	free(f_aux_line);
 	free(f_corr_aux_line);

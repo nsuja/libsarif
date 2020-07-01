@@ -41,7 +41,7 @@ int sarif_range_compression(double complex *out, ERS_Raw_Parser_Data_Patch *in, 
  */
 double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Algo algo, ERS_Raw_Parser_Params *params);
 
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex *out, double complex *in, int descale_range);
+int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in, int descale_range);
 
 int sarif_make_rcmc_offset_matrix(Sarif_Ctx *ctx);
 
