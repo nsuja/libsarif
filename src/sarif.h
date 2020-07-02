@@ -33,7 +33,7 @@ int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in);
 /**
  * @param[in] scale_fft: Divide the resulting FFT by the number of samples in range. This makes it run slower since it iterates over each output element
  */
-int sarif_range_compression(double complex *out, ERS_Raw_Parser_Data_Patch *in, ERS_Raw_Parser_Params *params, double complex *f_conj_range_chirp, int scale_fft);
+int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in, ERS_Raw_Parser_Params *params, double complex *f_conj_range_chirp, int scale_fft);
 
 /**
  * @param[in] fc: Doppler centroid frequency
@@ -45,3 +45,4 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 
 int sarif_make_rcmc_offset_matrix(Sarif_Ctx *ctx);
 
+int sarif_get_az_valid_lines(Sarif_Ctx *sarif_ctx);

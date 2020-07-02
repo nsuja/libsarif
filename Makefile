@@ -13,7 +13,8 @@ OBJECTS=src/sarif.o
 HEADERS=src/sarif.h
 
 CINCLUDE_PATH= -I$(SRC_PATH)
-CFLAGS=-g -Wall -fPIC $(CINCLUDE_PATH) `pkg-config --cflags fftw3`
+#CFLAGS=-g -Wall -fPIC $(CINCLUDE_PATH) `pkg-config --cflags fftw3`
+CFLAGS=-O2 -Wall -fPIC $(CINCLUDE_PATH) `pkg-config --cflags fftw3`
 LDFLAGS=-shared -Wl,--no-as-needed,-soname,$(OUTPUT) -lm  `pkg-config --libs fftw3`
 
 all: $(OUTPUT)

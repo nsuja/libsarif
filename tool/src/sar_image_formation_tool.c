@@ -53,6 +53,14 @@ int parse_opts(int argc, char **argv)
 	return 0;
 }
 
+long long get_time_usec()
+{
+	struct timeval now;
+	gettimeofday(&now, NULL);
+	return now.tv_sec * 1000000 + now.tv_usec;
+}
+
+
 int main(int argc, char **argv)
 {
 	int ret;
@@ -78,13 +86,9 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s:: ers_raw_parser_get_params_from_file(%s)\n", __func__, g_input_ldr);
 		return EXIT_FAILURE;
 	}
+	long long start;
 
 	log_ers_params(&params);
-
-	if(ers_raw_parser_get_raw_data_from_file(ctx, &data)) {
-		fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)\n", __func__, g_input_raw);
-		return EXIT_FAILURE;
-	}
 
 	Sarif_Ctx *sarif_ctx;
 
@@ -93,37 +97,59 @@ int main(int argc, char **argv)
 	double complex *f_conj_range_chirp, *f_conj_az_chirp;
 	sarif_make_range_chirp(&params, &f_conj_range_chirp);
 
-	sarif_remove_mean(data);
+	int az_valid_lines = 0;
+	for(int num_patch = 0;; num_patch++) {
+		double complex *out;
 
-	double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
-	sarif_range_compression(processed, data, &params, f_conj_range_chirp, 0);
+		start = get_time_usec();
+		fprintf(stdout, "%s:: Reading patch %d line %d\n", __func__, num_patch, az_valid_lines*num_patch);
+		if(ers_raw_parser_get_raw_data_from_file(ctx, &data, num_patch * az_valid_lines)) {
+			fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)\n", __func__, g_input_raw);
+			break;
+			//return EXIT_FAILURE;
+		}
+		printf("%s:: read() took %lld us\n", __func__, get_time_usec()-start);
 
-	double fc;
-	fc = sarif_calc_doppler_centroid(processed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
-	if(fc == NAN) {
-		fprintf(stderr, "%s:: sarif_calc_doppler_centroid(%p, %d, %p) error!", __func__, data, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
-		return EXIT_FAILURE;
-	} else {
-		fprintf(stdout, "Doppler center: %f Hz\n", fc);
+		start = get_time_usec();
+		sarif_remove_mean(data);
+		printf("%s:: remove_mean() took %lld us\n", __func__, get_time_usec()-start);
+
+		double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
+		start = get_time_usec();
+		sarif_range_compression(sarif_ctx, processed, data, &params, f_conj_range_chirp, 0);
+		printf("%s:: range_compress() took %lld us\n", __func__, get_time_usec()-start);
+
+		if(num_patch == 0) {
+			double fc;
+			fc = sarif_calc_doppler_centroid(processed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
+			if(fc == NAN) {
+				fprintf(stderr, "%s:: sarif_calc_doppler_centroid(%p, %d, %p) error!", __func__, data, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
+				return EXIT_FAILURE;
+			} else {
+				fprintf(stdout, "Doppler center: %f Hz\n", fc);
+			}
+
+			if(sarif_set_doppler_centroid(sarif_ctx, fc)) {
+				fprintf(stderr, "%s:: Error: sarif_set_doppler_centroid(%p, %f)", __func__, sarif_ctx, fc);
+				return EXIT_FAILURE;
+			}
+
+			if(sarif_make_azimuth_chirp(sarif_ctx)) {
+				fprintf(stderr, "%s:: Error: sarif_make_azimuth_chirp(%p)", __func__, sarif_ctx);
+				return EXIT_FAILURE;
+			}
+			az_valid_lines = sarif_get_az_valid_lines(sarif_ctx);
+			sarif_make_rcmc_offset_matrix(sarif_ctx);
+		}
+
+		start = get_time_usec();
+		sarif_azimuth_compression(sarif_ctx, &out, processed, 1);
+		printf("%s:: azimuth_compress() took %lld us\n", __func__, get_time_usec()-start);
+
+		ers_raw_parser_data_patch_free(data);
+		//free(out);
+		free(processed);
 	}
-
-	if(sarif_set_doppler_centroid(sarif_ctx, fc)) {
-		fprintf(stderr, "%s:: Error: sarif_set_doppler_centroid(%p, %f)", __func__, sarif_ctx, fc);
-		return EXIT_FAILURE;
-	}
-
-	if(sarif_make_azimuth_chirp(sarif_ctx)) {
-		fprintf(stderr, "%s:: Error: sarif_make_azimuth_chirp(%p)", __func__, sarif_ctx);
-		return EXIT_FAILURE;
-	}
-
-	double complex *out;
-
-	sarif_make_rcmc_offset_matrix(sarif_ctx);
-
-	sarif_azimuth_compression(sarif_ctx, &out, processed, 1);
-
-	ers_raw_parser_data_patch_free(data);
 
 	ers_raw_parser_free(ctx);
 
