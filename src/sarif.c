@@ -13,7 +13,6 @@
 #include <fftw3.h>
 #include "sarif.h"
 
-
 #define SARIF_MAX_RANGE_FFT_LEN (8192)
 
 struct Sarif_Ctx {
@@ -23,16 +22,17 @@ struct Sarif_Ctx {
 
 	double *sq_range; //squinted range
 
+	int has_ra_chirp;
+	double complex * ra_chirp;
+	double complex * f_ra_chirp; //Frequency domain, and conjugated
+
 	int has_az_chirp;
 	double complex *az_chirp[SARIF_MAX_RANGE_FFT_LEN]; //XXX TODO FIXME Conjugated Could use a better definition (double complex *) with n_valid_samples * fft_lines, see NOTE1
-	double complex *f_az_chirp[SARIF_MAX_RANGE_FFT_LEN];
+	double complex *f_az_chirp[SARIF_MAX_RANGE_FFT_LEN]; //Frequency domain, and conjugated
 	int valid_az_lines;
 
 	int rcmc_max_offset; //RCMC matrix maximum pixel offset
 	int *rcmc_offset_matrix; //Amount of "pixels" to shift left in range
-
-	double complex *f_in, *f_out;
-	double complex *f_in2;
 
 	int has_fftw_ra_plan;
 	fftw_plan p_f_ra, p_b_ra;
@@ -43,14 +43,10 @@ struct Sarif_Ctx {
 
 	int has_fftw_az_plan;
 	fftw_plan p_f_az, p_b_az;
-	fftw_plan p_f_az2, p_b_az2;
 	double complex * az_in;
-	double complex * az_out;
+	double complex * f_in;
 	double complex * f_corr;
-	double complex * az_aux_line;
-	double complex * az_f_aux_line;
-	double complex * az_f_corr_aux_line;
-	double complex * az_corr_aux_line;
+	double complex * az_out;
 };
 
 double complex * sarif_make_azimuth_chirp_for_range(double fc, double ka, double tau, double fs, double lines);
@@ -64,7 +60,6 @@ long long get_time_usec()
 
 Sarif_Ctx * sarif_ctx_alloc(ERS_Raw_Parser_Params *params)
 {
-	int fd_ldr = -1, fd_raw = -1;
 	Sarif_Ctx *ctx;
 
 	if(!params) {
@@ -89,6 +84,49 @@ Sarif_Ctx * sarif_ctx_alloc(ERS_Raw_Parser_Params *params)
 	return ctx;
 }
 
+void sarif_ctx_free(Sarif_Ctx *ctx)
+{
+	if(!ctx)
+		return;
+
+	free(ctx->sq_range);
+
+	if(ctx->has_ra_chirp) {
+		free(ctx->ra_chirp);
+		free(ctx->f_ra_chirp);
+		ctx->has_ra_chirp = 0;
+	}
+
+	if(ctx->has_az_chirp) {
+		for(int i = 0; i < SARIF_MAX_RANGE_FFT_LEN; i++) {
+			free(ctx->az_chirp[i]);
+			free(ctx->f_az_chirp[i]);
+		}
+		ctx->has_az_chirp = 0;
+	}
+
+	if(ctx->has_fftw_ra_plan) {
+		free(ctx->ra_aux_line);
+		free(ctx->ra_f_aux_line);
+		free(ctx->ra_f_corr_aux_line);
+		free(ctx->ra_corr_aux_line);
+		fftw_destroy_plan(ctx->p_f_ra);
+		fftw_destroy_plan(ctx->p_b_ra);
+	}
+
+	if(ctx->has_fftw_az_plan) {
+		free(ctx->az_in);
+		free(ctx->f_in);
+		free(ctx->f_corr);
+		free(ctx->az_out);
+		fftw_destroy_plan(ctx->p_f_az);
+		fftw_destroy_plan(ctx->p_b_az);
+	}
+
+	free(ctx->rcmc_offset_matrix);
+	free(ctx);
+}
+
 int sarif_set_doppler_centroid(Sarif_Ctx *ctx, double fc)
 {
 	if(!ctx) {
@@ -98,21 +136,20 @@ int sarif_set_doppler_centroid(Sarif_Ctx *ctx, double fc)
 	return 0;
 }
 
-int sarif_make_range_chirp(ERS_Raw_Parser_Params *params, double complex **out_range_chirp)
+int sarif_make_range_chirp(Sarif_Ctx *ctx)
 {
-	int tmp_chirp_len;
+	ERS_Raw_Parser_Params *params;
 	int intervals;
-	int fft_size;
 	double complex* range_chirp;
 	double complex* fft_range_chirp;
 	fftw_plan p;
 
-	if(!params) {
+	if(!ctx || !ctx->has_params) {
 		return -1;
 	}
+	params = &ctx->params;
 
 	intervals = (int)floor(params->tau*params->fs); //size_chirp_r
-	printf("%g %g %g %g %d\n", params->kr, params->tau, params->fs, params->tau*params->fs, intervals);
 
 	//Make range chirp
 	range_chirp = calloc(1, sizeof(double complex) * params->ra_fft_len);
@@ -122,7 +159,6 @@ int sarif_make_range_chirp(ERS_Raw_Parser_Params *params, double complex **out_r
 	}
 
 	fft_range_chirp = calloc(1, sizeof(double complex) * params->ra_fft_len);
-
 	p = fftw_plan_dft_1d(params->ra_fft_len, (double (*)[2])range_chirp, (double (*)[2])fft_range_chirp, FFTW_FORWARD, FFTW_ESTIMATE);
 	fftw_execute(p);
 
@@ -133,10 +169,11 @@ int sarif_make_range_chirp(ERS_Raw_Parser_Params *params, double complex **out_r
 	}
 	//printf("\n");
 
-	*out_range_chirp = fft_range_chirp;
+	ctx->ra_chirp = range_chirp;
+	ctx->f_ra_chirp = fft_range_chirp;
+	ctx->has_ra_chirp = 1;
 
 	fftw_destroy_plan(p);
-	free(range_chirp);
 
 	return 0;
 }
@@ -157,13 +194,11 @@ double complex * sarif_make_azimuth_chirp_for_range(double fc, double ka, double
 	return az_chirp;
 }
 
-
 int sarif_make_azimuth_chirp(Sarif_Ctx *ctx)
 {
 	ERS_Raw_Parser_Params *params;
 	fftw_plan p;
 	double complex *range, *ka;
-	double complex *az_chirp_temp;
 	double complex *aux_line;
 	double complex *f_aux_line;
 
@@ -191,14 +226,11 @@ int sarif_make_azimuth_chirp(Sarif_Ctx *ctx)
 		az_beam_width[i] = range[i] * params->az_beam_width * 0.8; //in ground[m], 80% fixed (3db)
 		az_tau[i] = az_beam_width[i]/params->velocity;
 	}
-	int pulses_for_full_aperture = (int)ceil(az_tau[params->n_valid_samples-1]*params->prf);
-	int n_valid_lines = params->fft_lines - pulses_for_full_aperture; //fft wraparound
 
 	//XXX TODO FIXME switch to advanced interface to avoid memcpy
-
 	aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
 	f_aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
-	p = fftw_plan_dft_1d(params->fft_lines, aux_line, f_aux_line, FFTW_FORWARD, FFTW_ESTIMATE);
+	p = fftw_plan_dft_1d(params->fft_lines, (double (*)[2])aux_line, (double (*)[2])f_aux_line, FFTW_FORWARD, FFTW_ESTIMATE);
 	//Make one azimuth chirp per range bin
 	for(int i = 0; i < params->n_valid_samples; i++) {
 		ctx->az_chirp[i] = sarif_make_azimuth_chirp_for_range(ctx->fc, ka[i], az_tau[i], params->prf, params->fft_lines);
@@ -213,27 +245,6 @@ int sarif_make_azimuth_chirp(Sarif_Ctx *ctx)
 	ctx->has_az_chirp = 1;
 	ctx->valid_az_lines = params->fft_lines - params->prf * az_tau[params->n_valid_samples-1];
 
-	printf("valid az lines: %d\n", ctx->valid_az_lines);
-
-//	//Position chirp in range vector (centered)  --> used for correlation procedure
-//	double complex* azimuth_chirp = calloc(1, sizeof(double complex) * azimuth);
-//	double complex* fft_azimuth_chirp = calloc(1, sizeof(double complex) * azimuth);
-//	memcpy(azimuth_chirp+((azimuth-az_intervals)/2)-1, az_chirp_temp, sizeof(double complex) * az_intervals);
-//	//for(int i = 0; i < azimuth; i++) {
-//	//>-printf("[%d](%g+j%g), ", i, creal(azimuth_chirp[i]), cimag(azimuth_chirp[i]));
-//	//}
-//	//printf("\n");
-//
-//	p = fftw_plan_dft_1d(azimuth, azimuth_chirp, fft_azimuth_chirp, FFTW_FORWARD, FFTW_MEASURE);
-//	fftw_execute(p);
-//	for(int i = 0; i < azimuth; i++) {
-//		//printf("[%d](%g+j%g), ", i, creal(fft_azimuth_chirp[i]), cimag(fft_azimuth_chirp[i]));
-//		fft_azimuth_chirp[i] = conj(fft_azimuth_chirp[i]);
-//	}
-//	//printf("\n");
-//
-//	*out_azimuth_chirp = fft_azimuth_chirp;
-//
 	free(aux_line);
 	free(f_aux_line);
 	free(az_tau);
@@ -241,7 +252,6 @@ int sarif_make_azimuth_chirp(Sarif_Ctx *ctx)
 	free(ka);
 	free(range);
 	fftw_destroy_plan(p);
-//	fftw_free(azimuth_chirp);
 
 	return 0;
 }
@@ -263,8 +273,9 @@ int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in)
 	return 0;
 }
 
-int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in, ERS_Raw_Parser_Params *params, double complex *f_conj_range_chirp, int scale_fft)
+int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in, int scale_fft)
 {
+	ERS_Raw_Parser_Params *params;
 	double complex *aux_line;
 	double complex *f_aux_line;
 	double complex *f_corr_aux_line;
@@ -272,6 +283,16 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 	int range;
 	fftw_plan p_forward, p_backward;
 
+	if(!ctx || !out || !in) {
+		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %d)\n", __func__, ctx, in, scale_fft);
+		return -1;
+	}
+	if(!ctx->has_params || !ctx->has_ra_chirp) {
+		fprintf(stderr, "%s:: Error has_params %d has_ra_chirp %d\n", __func__, ctx->has_params, ctx->has_ra_chirp);
+		return -1;
+	}
+
+	params = &ctx->params;
 	range = in->n_ra;
 
 	if(!ctx->has_fftw_ra_plan) {
@@ -279,8 +300,8 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		ctx->ra_f_aux_line = f_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
 		ctx->ra_f_corr_aux_line = f_corr_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
 		ctx->ra_corr_aux_line = corr_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
-		ctx->p_f_ra = p_forward = fftw_plan_dft_1d(params->ra_fft_len, aux_line, f_aux_line, FFTW_FORWARD, FFTW_MEASURE);
-		ctx->p_b_ra = p_backward = fftw_plan_dft_1d(params->ra_fft_len, f_corr_aux_line, corr_aux_line, FFTW_BACKWARD, FFTW_MEASURE);
+		ctx->p_f_ra = p_forward = fftw_plan_dft_1d(params->ra_fft_len, (double (*)[2])aux_line, (double (*)[2])f_aux_line, FFTW_FORWARD, FFTW_MEASURE);
+		ctx->p_b_ra = p_backward = fftw_plan_dft_1d(params->ra_fft_len, (double (*)[2])f_corr_aux_line, (double (*)[2])corr_aux_line, FFTW_BACKWARD, FFTW_MEASURE);
 		ctx->has_fftw_ra_plan = 1;
 	} else {
 		aux_line = ctx->ra_aux_line;
@@ -312,12 +333,10 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		//fft ok, chirp ok
 		//printf("CORR\n");
 		for(int j = 0; j < params->ra_fft_len; j++) {
-			f_corr_aux_line[j] = f_aux_line[j] * f_conj_range_chirp[j];
+			f_corr_aux_line[j] = f_aux_line[j] * ctx->f_ra_chirp[j];
 		//	printf("[%d](%g+j%g), ", j, creal(f_corr_aux_line[j]), cimag(f_corr_aux_line[j]));
 		}
 		//printf("\n");
-
-		//int sarif_get_rcmc_data(f_corr_aux_line, ERS_Raw_Parser_Params *params)
 
 		fftw_execute(p_backward);
 
@@ -331,24 +350,8 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		} else {
 			memcpy(out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
 		}
-
-		//double complex *aux = &out[i*params->n_valid_samples];
-		//if( i == 0) {
-		//	printf("SHIFTED\n");
-		//	for(int j = 0; j < params->n_valid_samples; j++) {
-		//		printf("[%d](%g+j%g), ", j, creal(aux[j])/params->ra_fft_len, cimag(aux[j])/params->ra_fft_len);
-		//	}
-		//	printf("\n");
-		//}
 	}
 	printf("%s:: took %lld us\n", __func__, get_time_usec()-start);
-	//everything's ok!
-	//free(aux_line);
-	//free(f_aux_line);
-	//free(f_corr_aux_line);
-	//free(corr_aux_line);
-	//fftw_destroy_plan(p_forward);
-	//fftw_destroy_plan(p_backward);
 
 	return 0;
 }
@@ -397,14 +400,8 @@ double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Al
 int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in, int descale_range)
 {
 	ERS_Raw_Parser_Params *params;
-	double complex *f_in, *f_out;
-	double complex *f_corr;
-	double complex *aux_line;
-	double complex *f_aux_line;
-	double complex *f_corr_aux_line;
-	double complex *corr_aux_line;
-	fftw_plan p_forward, p_backward;
-	fftw_plan p_f2, p_b2;
+	double complex *f_in, *f_corr;
+	fftw_plan p_f, p_b;
 
 	if(!ctx || !out) {
 		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %d)\n", __func__, ctx, out, descale_range);
@@ -423,76 +420,37 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 		ctx->f_corr = f_corr =  calloc(1, sizeof(double complex) * params->fft_lines * params->n_valid_samples);
 		ctx->az_out = calloc(1, sizeof(double complex) * params->fft_lines * params->n_valid_samples);
 
-		ctx->az_aux_line = aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
-		ctx->az_f_aux_line = f_aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
-		ctx->az_f_corr_aux_line = f_corr_aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
-		ctx->az_corr_aux_line = corr_aux_line =  calloc(1, sizeof(double complex) * params->fft_lines);
-		ctx->p_f_az = p_forward = fftw_plan_dft_1d(params->fft_lines, aux_line, f_aux_line, FFTW_FORWARD, FFTW_MEASURE);
-		ctx->p_b_az = p_backward = fftw_plan_dft_1d(params->fft_lines, f_corr_aux_line, corr_aux_line, FFTW_BACKWARD, FFTW_MEASURE);
-
 		int n[] = {params->fft_lines};
 		int istride, ostride;
 		int *inembed, *onembed;
 		istride = ostride = params->n_valid_samples;
 		inembed = onembed = n;
-		ctx->p_f_az2 = p_f2 = fftw_plan_many_dft(1, n, params->n_valid_samples,
-				ctx->az_in, inembed,
+		ctx->p_f_az = p_f = fftw_plan_many_dft(1, n, params->n_valid_samples,
+				(double (*)[2])ctx->az_in, inembed,
 				istride, 1,
-				ctx->f_in, onembed,
+				(double (*)[2])ctx->f_in, onembed,
 				ostride, 1,
 				FFTW_FORWARD, FFTW_MEASURE);
-		ctx->p_b_az2 = p_b2 = fftw_plan_many_dft(1, n, params->n_valid_samples,
-				ctx->f_corr, inembed,
+		ctx->p_b_az = p_b = fftw_plan_many_dft(1, n, params->n_valid_samples,
+				(double (*)[2])ctx->f_corr, inembed,
 				istride, 1,
-				ctx->az_out, onembed,
+				(double (*)[2])ctx->az_out, onembed,
 				ostride, 1,
 				FFTW_BACKWARD, FFTW_MEASURE);
 
 		ctx->has_fftw_az_plan = 1;
 	} else {
-		aux_line = ctx->az_aux_line;
-		f_aux_line = ctx->az_f_aux_line;
-		f_corr_aux_line = ctx->az_f_corr_aux_line;
-		corr_aux_line = ctx->az_corr_aux_line;
-		p_forward = ctx->p_f_az;
-		p_backward = ctx->p_b_az;
-
 		f_in = ctx->f_in;
-		f_out = ctx->f_out;
 		f_corr = ctx->f_corr;
-		p_f2 = ctx->p_f_az2;
-		p_b2 = ctx->p_b_az2;
+		p_f = ctx->p_f_az;
+		p_b = ctx->p_b_az;
 	}
 
 	//FFT in azimuth
-	//XXX TODO FIXME Change azimuth and range orientation, there are more operations in az dimension and vectors have to be manually transposed or try with the advanced interface
-
 	long long start = get_time_usec();
 	memcpy(ctx->az_in, in, sizeof(double complex) * params->n_valid_samples * params->fft_lines);
-	fftw_execute(p_f2);
+	fftw_execute(p_f);
 	printf("%s:: FFT1 took %lld us\n", __func__, get_time_usec()-start);
-	// This is slow..
-	//start = get_time_usec();
-	//for(int i = 0; i < params->n_valid_samples; i++) {
-	//	//printf("%s:: IN\n", __func__);
-	//	for(int j = 0; j < params->fft_lines; j++) {
-	//		if(descale_range)
-	//			aux_line[j] = in[j*params->n_valid_samples+i]/params->ra_fft_len;
-	//		else
-	//			aux_line[j] = in[j*params->n_valid_samples+i];
-	//		//printf("[%d](%g+j%g), ", j, creal(aux_line[j]), cimag(aux_line[j]));
-	//	}
-	//	//printf("\n");
-
-	//	fftw_execute(p_forward);
-	//	//printf("AZ FFT\n");
-	//	for(int j = 0; j < params->fft_lines; j++) {
-	//		//printf("[%d](%g+j%g), ", j, creal(f_aux_line[j]), cimag(f_aux_line[j]));
-	//		f_in[j*params->n_valid_samples+i] = f_aux_line[j];
-	//	}
-	//	//printf("\n");
-	//}
-	//printf("%s:: FFT2 took %lld us\n", __func__, get_time_usec()-start);
 
 	start = get_time_usec();
 	//Correlation and RCMC
@@ -512,8 +470,6 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 				}
 			}
 
-
-			//XXX TODO FIXME descale_range
 			f_corr[i + j*params->n_valid_samples] = f_in[i + j*params->n_valid_samples] * ctx->f_az_chirp[i][j] / params->ra_fft_len; //XXX NOTE1
 			//f_corr_aux_line[j] = f_in[j] * conj((*(ctx->f_az_chirp[i]+j)); //XXX NOTE1
 			//printf("[%d](%g+j%g), ", j, creal(f_corr_aux_line[j]), cimag(f_corr_aux_line[j]));
@@ -523,40 +479,10 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 	printf("%s:: CORR and RCMC took %lld us\n", __func__, get_time_usec()-start);
 
 	start = get_time_usec();
-	fftw_execute(p_b2);
-
-	//for(int i = 0; i < params->n_valid_samples; i++) {
-	//	//printf("%s:: IN\n", __func__);
-	//	for(int j = 0; j < params->fft_lines; j++) {
-	//		f_corr_aux_line[j] = f_out[i + j*params->n_valid_samples];
-	//		//printf("[%d](%g+j%g), ", j, creal(aux_line[j]), cimag(aux_line[j]));
-	//	}
-	//	//printf("\n");
-
-	//	fftw_execute(p_backward);
-	//	//if(i == 0) {
-	//	//	printf("IF\n");
-	//	//	for(int j = 0; j < params->fft_lines; j++) {
-	//	//		printf("[%d](%g+j%g), ", j, creal(corr_aux_line[j])/params->fft_lines, cimag(corr_aux_line[j])/params->fft_lines);
-	//	//	}
-	//	//	printf("\n");
-	//	//}
-	//	for(int j = 0; j < params->fft_lines; j++) {
-	//		f_out[i + j*params->n_valid_samples] = corr_aux_line[j]/params->fft_lines;
-	//		//printf("[%d](%g+j%g), ", j, creal(aux_line[j]), cimag(aux_line[j]));
-	//	}
-	//}
+	fftw_execute(p_b);
 	printf("%s:: IFFT took %lld us\n", __func__, get_time_usec()-start);
 
 	*out = ctx->az_out;
-
-	//free(f_in);
-	//free(aux_line);
-	//free(f_aux_line);
-	//free(f_corr_aux_line);
-	//free(corr_aux_line);
-//	fftw_destroy_plan(p_forward);
-//	fftw_destroy_plan(p_backward);
 
 	return 0;
 }

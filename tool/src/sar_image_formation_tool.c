@@ -6,6 +6,7 @@
 #include <getopt.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <sys/time.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -63,7 +64,6 @@ long long get_time_usec()
 
 int main(int argc, char **argv)
 {
-	int ret;
 	ERS_Raw_Parser_Ctx *ctx;
 	ERS_Raw_Parser_Params params;
 	ERS_Raw_Parser_Data_Patch *data;
@@ -94,8 +94,7 @@ int main(int argc, char **argv)
 
 	sarif_ctx = sarif_ctx_alloc(&params);
 
-	double complex *f_conj_range_chirp, *f_conj_az_chirp;
-	sarif_make_range_chirp(&params, &f_conj_range_chirp);
+	sarif_make_range_chirp(sarif_ctx);
 
 	int az_valid_lines = 0;
 	for(int num_patch = 0;; num_patch++) {
@@ -116,7 +115,7 @@ int main(int argc, char **argv)
 
 		double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
 		start = get_time_usec();
-		sarif_range_compression(sarif_ctx, processed, data, &params, f_conj_range_chirp, 0);
+		sarif_range_compression(sarif_ctx, processed, data, 0);
 		printf("%s:: range_compress() took %lld us\n", __func__, get_time_usec()-start);
 
 		if(num_patch == 0) {
@@ -152,6 +151,7 @@ int main(int argc, char **argv)
 	}
 
 	ers_raw_parser_free(ctx);
+	sarif_ctx_free(sarif_ctx);
 
 	return 0;
 }
