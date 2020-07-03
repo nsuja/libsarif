@@ -125,6 +125,9 @@ void sarif_ctx_free(Sarif_Ctx *ctx)
 
 	free(ctx->rcmc_offset_matrix);
 	free(ctx);
+
+	fftw_cleanup();
+
 }
 
 int sarif_set_doppler_centroid(Sarif_Ctx *ctx, double fc)

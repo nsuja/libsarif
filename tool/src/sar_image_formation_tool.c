@@ -105,7 +105,6 @@ int main(int argc, char **argv)
 		if(ers_raw_parser_get_raw_data_from_file(ctx, &data, num_patch * az_valid_lines)) {
 			fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)\n", __func__, g_input_raw);
 			break;
-			//return EXIT_FAILURE;
 		}
 		printf("%s:: read() took %lld us\n", __func__, get_time_usec()-start);
 
