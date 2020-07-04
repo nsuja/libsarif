@@ -33,17 +33,27 @@ int sarif_make_azimuth_chirp(Sarif_Ctx *ctx);
 int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in);
 
 /**
- * @param[in] scale_fft: Divide the resulting FFT by the number of samples in range. This makes it run slower since it iterates over each output element
+ * @param[out] out: Range compressed output data, values are not scaled
  */
-int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in, int scale_fft);
+int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in);
 
 /**
- * @param[in] fc: Doppler centroid frequency
- * @param[in] descale_fft: Divide the input FFT by the number of samples in range. Set if scale_fft=0 in @see sarif_range_compression. Does not affect performance
+ * Estimated doppler frequency centroid
+ * @note To set the value in the context use sarif_set_doppler_centroid()
  */
 double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Algo algo, ERS_Raw_Parser_Params *params);
 
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in, int descale_range);
+/**
+ * Makes azimuth compression and gets final SLC
+ * Data patch has valid values for params.n_valid_samples * az_valid_lines (@see sarif_get_az_valid_lines()). Actual allocated size is params.n_valid_samples & params.fft_lines
+ * User must also call sarif_make_rcmc_offset_matrix() before azimuth correction
+ * @note Do not free out, data is valid until next call
+ *
+ * @param[in] ctx: Valid Sarif_Ctx, must have azimuth chirp properly initialized with sarif_make_azimuth_chirp()
+ * @param[out] out: Output SLC data patch,
+ * @param[in] in: Input data patch after range compression (@see sarif_range_compression). This parameter will probably dissapear, and intermediate data will be kept inside context and accesible via getters
+ */
+int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in);
 
 int sarif_make_rcmc_offset_matrix(Sarif_Ctx *ctx);
 

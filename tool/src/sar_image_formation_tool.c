@@ -35,7 +35,7 @@ static struct option long_opts[] = {
 
 int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
 {
-	static matvar_t *variable2d = NULL;
+	matvar_t *variable2d = NULL;
 	char* fieldname2d = "data";
 	size_t dim2d[2];
 	double *matout_re = NULL;
@@ -44,6 +44,7 @@ int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
 	//Create and fill Real and Imaginary arrays
 	matout_re = calloc(1, sizeof(double) * azimuth * range);
 	matout_im = calloc(1, sizeof(double) * azimuth * range);
+	mat_complex_split_t mycomplexdouble = {matout_re, matout_im};
 	for (int j = 0; j < range; j++ ) {
 		for (int i = 0; i < azimuth; i++ ) {
 			size_t mat_idx = azimuth*j+i;
@@ -52,23 +53,29 @@ int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
 			matout_im[mat_idx] = cimag(data[idx]);
 		}
 	}
-	mat_complex_split_t mycomplexdouble = {matout_re, matout_im};
+	for (int j = 0; j < range; j++ ) {
+		for (int i = 0; i < azimuth; i++ ) {
+			size_t mat_idx = azimuth*j+i;
+			size_t idx = range*i+j;
+			matout_re[mat_idx] = creal(data[idx]);
+			matout_im[mat_idx] = cimag(data[idx]);
+		}
+	}
 
 	dim2d[0] = azimuth;
 	dim2d[1] = range;
+	variable2d = Mat_VarCreate(fieldname2d, MAT_C_DOUBLE, MAT_T_DOUBLE, 2, dim2d, &mycomplexdouble, MAT_F_COMPLEX); //rank 2
 	if(!variable2d) {
-		variable2d = Mat_VarCreate(fieldname2d, MAT_C_DOUBLE, MAT_T_DOUBLE, 2, dim2d, &mycomplexdouble, MAT_F_COMPLEX); //rank 2
-		if(!variable2d) {
-			fprintf(stderr, "%s:: Error creating variable\n", __func__);
-			goto save_to_mat_error;
-		}
+		fprintf(stderr, "%s:: Error creating variable\n", __func__);
+		goto save_to_mat_error;
 	}
+
 	int dims = 1;
 	if(Mat_VarWriteAppend(matfp, variable2d, MAT_COMPRESSION_NONE, dims)) {
 		fprintf(stderr, "%s:: Error writing variable\n", __func__);
 		goto save_to_mat_error;
 	}
-	//Mat_VarFree(variable2d);
+	Mat_VarFree(variable2d);
 
 	free(matout_re);
 	free(matout_im);
@@ -76,7 +83,7 @@ int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
 	return 0;
 
 save_to_mat_error:
-	//Mat_VarFree(variable2d);
+	Mat_VarFree(variable2d);
 
 	free(matout_re);
 	free(matout_im);
@@ -123,6 +130,7 @@ long long get_time_usec()
 
 int main(int argc, char **argv)
 {
+	int ret;
 	ERS_Raw_Parser_Ctx *ctx;
 	ERS_Raw_Parser_Params params;
 	ERS_Raw_Parser_Data_Patch *data;
@@ -171,7 +179,11 @@ int main(int argc, char **argv)
 
 		start = get_time_usec();
 		fprintf(stdout, "%s:: Reading patch %d line %d\n", __func__, num_patch, az_valid_lines*num_patch);
-		if(ers_raw_parser_get_raw_data_from_file(ctx, &data, num_patch * az_valid_lines)) {
+		ret = ers_raw_parser_get_raw_data_from_file(ctx, &data, num_patch * az_valid_lines);
+		if(ret == 1) {
+			fprintf(stderr, "%s:: EOF?\n", __func__);
+			break;
+		} else if(ret < 0) {
 			fprintf(stderr, "%s:: ers_raw_parser_get_raw_data_from_file(%s)\n", __func__, g_input_raw);
 			break;
 		}
@@ -183,7 +195,7 @@ int main(int argc, char **argv)
 
 		double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
 		start = get_time_usec();
-		sarif_range_compression(sarif_ctx, processed, data, 0);
+		sarif_range_compression(sarif_ctx, processed, data);
 		printf("%s:: range_compress() took %lld us\n", __func__, get_time_usec()-start);
 
 		if(num_patch == 0) {
@@ -210,14 +222,13 @@ int main(int argc, char **argv)
 		}
 
 		start = get_time_usec();
-		sarif_azimuth_compression(sarif_ctx, &out, processed, 1);
+		sarif_azimuth_compression(sarif_ctx, &out, processed);
 		printf("%s:: azimuth_compress() took %lld us\n", __func__, get_time_usec()-start);
 
 		if(matfp)
 			save_to_mat(matfp, out, params.n_valid_samples, az_valid_lines);
 
 		ers_raw_parser_data_patch_free(data);
-		//free(out);
 		free(processed);
 	}
 

@@ -276,7 +276,7 @@ int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in)
 	return 0;
 }
 
-int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in, int scale_fft)
+int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in)
 {
 	ERS_Raw_Parser_Params *params;
 	double complex *aux_line;
@@ -287,7 +287,7 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 	fftw_plan p_forward, p_backward;
 
 	if(!ctx || !out || !in) {
-		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %d)\n", __func__, ctx, in, scale_fft);
+		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %p)\n", __func__, ctx, out, in);
 		return -1;
 	}
 	if(!ctx->has_params || !ctx->has_ra_chirp) {
@@ -344,15 +344,7 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		fftw_execute(p_backward);
 
 		//printf("IF\n");
-		if(scale_fft) {
-			for(int j = 0; j < params->n_valid_samples; j++) {
-				//printf("[%d](%g+j%g), ", j, creal(corr_aux_line[j])/params->ra_fft_len, cimag(corr_aux_line[j])/params->ra_fft_len);
-				out[j + (in->az_pos + i) * params->n_valid_samples] = corr_aux_line[j]/params->ra_fft_len;
-			}
-			//printf("\n");
-		} else {
-			memcpy(out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
-		}
+		memcpy(out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
 	}
 	printf("%s:: took %lld us\n", __func__, get_time_usec()-start);
 
@@ -400,18 +392,18 @@ double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Al
 	return fc;
 }
 
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in, int descale_range)
+int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in)
 {
 	ERS_Raw_Parser_Params *params;
 	double complex *f_in, *f_corr;
 	fftw_plan p_f, p_b;
 
-	if(!ctx || !out) {
-		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %d)\n", __func__, ctx, out, descale_range);
+	if(!ctx || !out || !in) {
+		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %p)\n", __func__, ctx, out, in);
 		return -1;
 	}
-	if(!ctx->has_params || !ctx->has_az_chirp) {
-		fprintf(stderr, "%s:: Error has_params %d has_az_chirp %d\n", __func__, ctx->has_params, ctx->has_az_chirp);
+	if(!ctx->has_params || !ctx->has_az_chirp || !ctx->rcmc_offset_matrix) {
+		fprintf(stderr, "%s:: Error, previous steps missing! has_params %d has_az_chirp %d rcmc_offset_matrix %p\n", __func__, ctx->has_params, ctx->has_az_chirp, ctx->rcmc_offset_matrix);
 		return -1;
 	}
 
