@@ -473,7 +473,7 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 				}
 			}
 
-			f_corr[i + j*params->n_valid_samples] = f_in[i + j*params->n_valid_samples] * ctx->f_az_chirp[i][j] / params->ra_fft_len; //XXX NOTE1
+			f_corr[i + j*params->n_valid_samples] = f_in[i + j*params->n_valid_samples] * ctx->f_az_chirp[i][j] / params->ra_fft_len / params->fft_lines; //XXX NOTE1
 			//f_corr_aux_line[j] = f_in[j] * conj((*(ctx->f_az_chirp[i]+j)); //XXX NOTE1
 			//printf("[%d](%g+j%g), ", j, creal(f_corr_aux_line[j]), cimag(f_corr_aux_line[j]));
 		}

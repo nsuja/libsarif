@@ -10,23 +10,79 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+#include <matio.h>
+
 #include <ers_raw_parser.h>
 #include <sarif.h>
 
-#define INPUT_PATH_SIZE (2000)
+#define PATH_SIZE (2000)
 
 static int g_has_input_ldr = 0;
-static char g_input_ldr[INPUT_PATH_SIZE];
+static char g_input_ldr[PATH_SIZE];
 static int g_has_input_raw = 0;
-static char g_input_raw[INPUT_PATH_SIZE];
+static char g_input_raw[PATH_SIZE];
+static int g_has_output = 0;
+static char g_output_path[PATH_SIZE];
 
-static const char *short_opts= "l:r:";
+static const char *short_opts= "l:r:o:";
 static struct option long_opts[] = {
 	{"ldr", required_argument, NULL,'l'},
 	{"raw", required_argument, NULL,'r'},
+	{"output", required_argument, NULL,'o'},
 	{"help", no_argument, NULL,'h'},
 	{NULL,0,NULL,0}
 };
+
+int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
+{
+	static matvar_t *variable2d = NULL;
+	char* fieldname2d = "data";
+	size_t dim2d[2];
+	double *matout_re = NULL;
+	double *matout_im = NULL;
+
+	//Create and fill Real and Imaginary arrays
+	matout_re = calloc(1, sizeof(double) * azimuth * range);
+	matout_im = calloc(1, sizeof(double) * azimuth * range);
+	for (int j = 0; j < range; j++ ) {
+		for (int i = 0; i < azimuth; i++ ) {
+			size_t mat_idx = azimuth*j+i;
+			size_t idx = range*i+j;
+			matout_re[mat_idx] = creal(data[idx]);
+			matout_im[mat_idx] = cimag(data[idx]);
+		}
+	}
+	mat_complex_split_t mycomplexdouble = {matout_re, matout_im};
+
+	dim2d[0] = azimuth;
+	dim2d[1] = range;
+	if(!variable2d) {
+		variable2d = Mat_VarCreate(fieldname2d, MAT_C_DOUBLE, MAT_T_DOUBLE, 2, dim2d, &mycomplexdouble, MAT_F_COMPLEX); //rank 2
+		if(!variable2d) {
+			fprintf(stderr, "%s:: Error creating variable\n", __func__);
+			goto save_to_mat_error;
+		}
+	}
+	int dims = 1;
+	if(Mat_VarWriteAppend(matfp, variable2d, MAT_COMPRESSION_NONE, dims)) {
+		fprintf(stderr, "%s:: Error writing variable\n", __func__);
+		goto save_to_mat_error;
+	}
+	//Mat_VarFree(variable2d);
+
+	free(matout_re);
+	free(matout_im);
+
+	return 0;
+
+save_to_mat_error:
+	//Mat_VarFree(variable2d);
+
+	free(matout_re);
+	free(matout_im);
+
+	return -1;
+}
 
 int parse_opts(int argc, char **argv)
 {
@@ -35,12 +91,16 @@ int parse_opts(int argc, char **argv)
 	while ((c = getopt_long(argc, argv, short_opts, long_opts, NULL)) != -1) {
 		switch (c){
 			case 'l':
-				snprintf(g_input_ldr, INPUT_PATH_SIZE, "%s", optarg);
+				snprintf(g_input_ldr, PATH_SIZE, "%s", optarg);
 				g_has_input_ldr = 1;
 				break;
 			case 'r':
-				snprintf(g_input_raw, INPUT_PATH_SIZE, "%s", optarg);
+				snprintf(g_input_raw, PATH_SIZE, "%s", optarg);
 				g_has_input_raw = 1;
+				break;
+			case 'o':
+				snprintf(g_output_path, PATH_SIZE, "%s", optarg);
+				g_has_output = 1;
 				break;
 			case 'h':
 				//print_help(argc, argv);
@@ -61,12 +121,14 @@ long long get_time_usec()
 	return now.tv_sec * 1000000 + now.tv_usec;
 }
 
-
 int main(int argc, char **argv)
 {
 	ERS_Raw_Parser_Ctx *ctx;
 	ERS_Raw_Parser_Params params;
 	ERS_Raw_Parser_Data_Patch *data;
+	long long start;
+	mat_t *matfp = NULL;
+	Mat_LogInit("ASD");
 
 	if(parse_opts(argc, argv)) {
 		//print_help(argv[0]);
@@ -86,7 +148,14 @@ int main(int argc, char **argv)
 		fprintf(stderr, "%s:: ers_raw_parser_get_params_from_file(%s)\n", __func__, g_input_ldr);
 		return EXIT_FAILURE;
 	}
-	long long start;
+
+	if(g_has_output) {
+		matfp = Mat_CreateVer(g_output_path, NULL, MAT_FT_MAT73);
+		if(!matfp) {
+			fprintf(stderr, "%s:: Error creating MAT file: Mat_CreateVer(%s, %p, %d)\n", __func__, g_output_path, NULL, MAT_FT_MAT5);
+			return EXIT_FAILURE;
+		}
+	}
 
 	log_ers_params(&params);
 
@@ -144,9 +213,16 @@ int main(int argc, char **argv)
 		sarif_azimuth_compression(sarif_ctx, &out, processed, 1);
 		printf("%s:: azimuth_compress() took %lld us\n", __func__, get_time_usec()-start);
 
+		if(matfp)
+			save_to_mat(matfp, out, params.n_valid_samples, az_valid_lines);
+
 		ers_raw_parser_data_patch_free(data);
 		//free(out);
 		free(processed);
+	}
+
+	if(matfp) {
+		Mat_Close(matfp);
 	}
 
 	ers_raw_parser_free(ctx);

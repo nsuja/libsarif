@@ -12,7 +12,7 @@ HEADERS=
 
 CINCLUDE_PATH= -I$(SRC_PATH)
 CFLAGS=-Wall -fPIC $(CINCLUDE_PATH)
-LDFLAGS=-Wl,--no-as-needed -lm -lers_raw_parser -lsarif
+LDFLAGS=-Wl,--no-as-needed -lm -lers_raw_parser -lsarif -lmatio
 
 .PHONY: all release clean
 
