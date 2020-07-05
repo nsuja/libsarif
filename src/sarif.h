@@ -58,3 +58,7 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 int sarif_make_rcmc_offset_matrix(Sarif_Ctx *ctx);
 
 int sarif_get_az_valid_lines(Sarif_Ctx *sarif_ctx);
+
+int sarif_multilook_patch(Sarif_Ctx *ctx);
+
+int sarif_get_multilooked_patch(Sarif_Ctx *sarif_ctx, double **multilooked, int *ml_ra, int *ml_az);

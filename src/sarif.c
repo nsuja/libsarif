@@ -47,6 +47,13 @@ struct Sarif_Ctx {
 	double complex * f_in;
 	double complex * f_corr;
 	double complex * az_out;
+
+	int multilook_valid;
+	int n_looks_az;
+	int multilook_az;
+	int n_looks_ra;
+	int multilook_ra;
+	double * multilooked_out;
 };
 
 double complex * sarif_make_azimuth_chirp_for_range(double fc, double ka, double tau, double fs, double lines);
@@ -476,6 +483,8 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 	start = get_time_usec();
 	fftw_execute(p_b);
 	printf("%s:: IFFT took %lld us\n", __func__, get_time_usec()-start);
+	//Changed output, so multilook becomes incompatible
+	ctx->multilook_valid = 0;
 
 	*out = ctx->az_out;
 
@@ -529,4 +538,72 @@ int sarif_get_az_valid_lines(Sarif_Ctx *ctx)
 		return -1;
 
 	return ctx->valid_az_lines;
+}
+
+//int sarif_multilook_last_patch(Sarif_Ctx *ctx)
+//{
+//	return sarif_multilook_patch(ctx, &ctx->params, ctx->az_out, &ctx->multilooked_out);
+//}
+
+int sarif_multilook_patch(Sarif_Ctx *ctx)
+{
+	if(!ctx || !ctx->az_out) {
+		fprintf(stderr, "%s:: No output yet! (%p,%p)\n", __func__, ctx, ctx->az_out);
+		return -1;
+	}
+	if(!ctx->multilooked_out) {
+		int ratio = 0;
+		//To make square pixels
+		if(ctx->params.ground_az_res > ctx->params.ground_ra_res) {
+			ratio = round(ctx->params.ground_az_res/ctx->params.ground_ra_res);
+			if(ratio > 1) {
+				ctx->n_looks_ra = ratio;
+				ctx->multilook_ra = ctx->params.n_valid_samples/ctx->n_looks_ra;
+				ctx->n_looks_az = 1;
+				ctx->multilook_az = ctx->valid_az_lines;
+			}
+		} else {
+			ratio = round(ctx->params.ground_ra_res/ctx->params.ground_az_res);
+			if(ratio > 1) {
+				ctx->n_looks_az = ratio;
+				ctx->multilook_az = ctx->valid_az_lines/ctx->n_looks_az;
+				ctx->n_looks_ra = 1;
+				ctx->multilook_ra = ctx->params.n_valid_samples;
+			}
+		}
+		if(ratio > 1) {
+			printf("%s:: Multilooked output size: (%d, %d) <- orig (%d, %d)\n", __func__, ctx->multilook_ra, ctx->multilook_az, ctx->params.n_valid_samples, ctx->valid_az_lines);
+			ctx->multilooked_out = calloc(1, sizeof(double) * ctx->multilook_az * ctx->multilook_ra);
+		}
+	}
+	double value;
+	for(int i = 0; i < ctx->multilook_ra; i++) {
+		if(ctx->n_looks_ra) {
+			//TODO
+		}
+		for(int j = 0; j < ctx->multilook_az; j++) {
+			value = 0;
+			for(int k = 0; k < ctx->n_looks_az; k++)
+				value += cabs(ctx->az_out[i + (j*ctx->n_looks_az+k)*ctx->params.n_valid_samples]);
+			value /= (double)ctx->n_looks_az;
+			ctx->multilooked_out[i + j*ctx->multilook_ra] = value;
+		}
+	}
+
+	ctx->multilook_valid = 1;
+	return 0;
+}
+
+int sarif_get_multilooked_patch(Sarif_Ctx *ctx, double **multilooked, int *ml_ra, int *ml_az)
+{
+	if(!ctx) {
+		return -1;
+	}
+	if(!ctx->multilook_valid) {
+		return -1;
+	}
+	*multilooked = ctx->multilooked_out;
+	*ml_ra = ctx->multilook_ra;
+	*ml_az = ctx->multilook_az;
+	return 0;
 }

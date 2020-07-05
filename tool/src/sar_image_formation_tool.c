@@ -23,17 +23,23 @@ static int g_has_input_raw = 0;
 static char g_input_raw[PATH_SIZE];
 static int g_has_output = 0;
 static char g_output_path[PATH_SIZE];
+static int g_multilook = 0;
+
+enum Getopt_Short{
+	OPT_MULTILOOK = 1,
+};
 
 static const char *short_opts= "l:r:o:";
 static struct option long_opts[] = {
 	{"ldr", required_argument, NULL,'l'},
 	{"raw", required_argument, NULL,'r'},
 	{"output", required_argument, NULL,'o'},
+	{"multilook", no_argument, NULL, OPT_MULTILOOK},
 	{"help", no_argument, NULL,'h'},
 	{NULL,0,NULL,0}
 };
 
-int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
+int save_to_mat_double(mat_t *matfp, double *data, int range, int azimuth)
 {
 	matvar_t *variable2d = NULL;
 	char* fieldname2d = "data";
@@ -49,10 +55,53 @@ int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
 		for (int i = 0; i < azimuth; i++ ) {
 			size_t mat_idx = azimuth*j+i;
 			size_t idx = range*i+j;
-			matout_re[mat_idx] = creal(data[idx]);
-			matout_im[mat_idx] = cimag(data[idx]);
+			matout_re[mat_idx] = data[idx];
 		}
 	}
+
+	dim2d[0] = azimuth;
+	dim2d[1] = range;
+	variable2d = Mat_VarCreate(fieldname2d, MAT_C_DOUBLE, MAT_T_DOUBLE, 2, dim2d, &mycomplexdouble, MAT_F_COMPLEX); //rank 2
+	if(!variable2d) {
+		fprintf(stderr, "%s:: Error creating variable\n", __func__);
+		goto save_to_mat_error;
+	}
+
+	int dims = 1;
+	if(Mat_VarWriteAppend(matfp, variable2d, MAT_COMPRESSION_NONE, dims)) {
+		fprintf(stderr, "%s:: Error writing variable\n", __func__);
+		goto save_to_mat_error;
+	}
+	Mat_VarFree(variable2d);
+
+	free(matout_re);
+	free(matout_im);
+
+	return 0;
+
+
+save_to_mat_error:
+	Mat_VarFree(variable2d);
+	free(matout_re);
+	free(matout_im);
+
+	return -1;
+}
+
+
+
+int save_to_mat(mat_t *matfp, complex double *data, int range, int azimuth)
+{
+	matvar_t *variable2d = NULL;
+	char* fieldname2d = "data";
+	size_t dim2d[2];
+	double *matout_re = NULL;
+	double *matout_im = NULL;
+
+	//Create and fill Real and Imaginary arrays
+	matout_re = calloc(1, sizeof(double) * azimuth * range);
+	matout_im = calloc(1, sizeof(double) * azimuth * range);
+	mat_complex_split_t mycomplexdouble = {matout_re, matout_im};
 	for (int j = 0; j < range; j++ ) {
 		for (int i = 0; i < azimuth; i++ ) {
 			size_t mat_idx = azimuth*j+i;
@@ -108,6 +157,9 @@ int parse_opts(int argc, char **argv)
 			case 'o':
 				snprintf(g_output_path, PATH_SIZE, "%s", optarg);
 				g_has_output = 1;
+				break;
+			case OPT_MULTILOOK:
+				g_multilook = 1;
 				break;
 			case 'h':
 				//print_help(argc, argv);
@@ -225,8 +277,17 @@ int main(int argc, char **argv)
 		sarif_azimuth_compression(sarif_ctx, &out, processed);
 		printf("%s:: azimuth_compress() took %lld us\n", __func__, get_time_usec()-start);
 
-		if(matfp)
-			save_to_mat(matfp, out, params.n_valid_samples, az_valid_lines);
+		if(matfp) {
+			if(!g_multilook)
+				save_to_mat(matfp, out, params.n_valid_samples, az_valid_lines);
+			else {
+				int ml_ra, ml_az;
+				double *multilooked;
+				sarif_multilook_patch(sarif_ctx);
+				sarif_get_multilooked_patch(sarif_ctx, &multilooked, &ml_ra, &ml_az);
+				save_to_mat_double(matfp, multilooked, ml_ra, ml_az);
+			}
+		}
 
 		ers_raw_parser_data_patch_free(data);
 		free(processed);
