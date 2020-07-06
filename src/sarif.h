@@ -32,10 +32,14 @@ int sarif_make_azimuth_chirp(Sarif_Ctx *ctx);
 
 int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in);
 
+int sarif_range_compression(Sarif_Ctx *ctx, ERS_Raw_Parser_Data_Patch *in);
+
 /**
- * @param[out] out: Range compressed output data, values are not scaled
+ * @note Do not free out, data is valid until next call
+ *
+ * @param[out] out: Range compressed output data, values are not scaled. Output is valid until next sarif_range_compression() call, do not free
  */
-int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in);
+int sarif_get_range_compression_out(Sarif_Ctx *ctx, double complex **out);
 
 /**
  * Estimated doppler frequency centroid
@@ -45,15 +49,21 @@ double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Al
 
 /**
  * Makes azimuth compression and gets final SLC
- * Data patch has valid values for params.n_valid_samples * az_valid_lines (@see sarif_get_az_valid_lines()). Actual allocated size is params.n_valid_samples & params.fft_lines
- * User must also call sarif_make_rcmc_offset_matrix() before azimuth correction
- * @note Do not free out, data is valid until next call
+ * @note User must also call sarif_make_rcmc_offset_matrix() before azimuth correction
  *
  * @param[in] ctx: Valid Sarif_Ctx, must have azimuth chirp properly initialized with sarif_make_azimuth_chirp()
- * @param[out] out: Output SLC data patch,
- * @param[in] in: Input data patch after range compression (@see sarif_range_compression). This parameter will probably dissapear, and intermediate data will be kept inside context and accesible via getters
  */
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in);
+int sarif_azimuth_compression(Sarif_Ctx *ctx);
+
+/**
+ * Gets last output SLC data patch
+ * Data patch has valid values for params.n_valid_samples * az_valid_lines (@see sarif_get_az_valid_lines()). Actual allocated size is params.n_valid_samples & params.fft_lines
+ * @note Do not free out. out is valid until next sarif_azimuth_compression() call
+ *
+ * @param[in] ctx: Valid Sarif_Ctx, must have azimuth chirp properly initialized with sarif_make_azimuth_chirp()
+ * @param[out] out: Range and azimuth compressed output data, values are scaled by both fft lengths (range and azimuth)
+ */
+int sarif_get_slc_out(Sarif_Ctx *ctx, double complex **out);
 
 int sarif_make_rcmc_offset_matrix(Sarif_Ctx *ctx);
 

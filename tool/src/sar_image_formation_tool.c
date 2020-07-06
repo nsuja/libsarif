@@ -245,14 +245,15 @@ int main(int argc, char **argv)
 		sarif_remove_mean(data);
 		printf("%s:: remove_mean() took %lld us\n", __func__, get_time_usec()-start);
 
-		double complex *processed = calloc(1, sizeof(double complex) * params.n_valid_samples * data->n_az); //1 patch
 		start = get_time_usec();
-		sarif_range_compression(sarif_ctx, processed, data);
+		sarif_range_compression(sarif_ctx, data);
 		printf("%s:: range_compress() took %lld us\n", __func__, get_time_usec()-start);
 
 		if(num_patch == 0) {
 			double fc;
-			fc = sarif_calc_doppler_centroid(processed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
+			double complex *range_compressed;
+			sarif_get_range_compression_out(sarif_ctx, &range_compressed);
+			fc = sarif_calc_doppler_centroid(range_compressed, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
 			if(fc == NAN) {
 				fprintf(stderr, "%s:: sarif_calc_doppler_centroid(%p, %d, %p) error!", __func__, data, SARIF_DOPPLER_CENTROID_ALGO_AVGPHASE, &params);
 				return EXIT_FAILURE;
@@ -274,13 +275,14 @@ int main(int argc, char **argv)
 		}
 
 		start = get_time_usec();
-		sarif_azimuth_compression(sarif_ctx, &out, processed);
+		sarif_azimuth_compression(sarif_ctx);
 		printf("%s:: azimuth_compress() took %lld us\n", __func__, get_time_usec()-start);
 
 		if(matfp) {
-			if(!g_multilook)
+			if(!g_multilook) {
+				sarif_get_slc_out(sarif_ctx, &out);
 				save_to_mat(matfp, out, params.n_valid_samples, az_valid_lines);
-			else {
+			} else {
 				int ml_ra, ml_az;
 				double *multilooked;
 				sarif_multilook_patch(sarif_ctx);
@@ -290,7 +292,6 @@ int main(int argc, char **argv)
 		}
 
 		ers_raw_parser_data_patch_free(data);
-		free(processed);
 	}
 
 	if(matfp) {

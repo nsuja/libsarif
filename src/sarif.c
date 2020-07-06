@@ -40,13 +40,14 @@ struct Sarif_Ctx {
 	double complex * ra_f_aux_line;
 	double complex * ra_f_corr_aux_line;
 	double complex * ra_corr_aux_line;
+	double complex * ra_out; //Range compressed
 
 	int has_fftw_az_plan;
 	fftw_plan p_f_az, p_b_az;
 	double complex * az_in;
 	double complex * f_in;
 	double complex * f_corr;
-	double complex * az_out;
+	double complex * az_out; //Azimuth compressed, final SLC
 
 	int multilook_valid;
 	int n_looks_az;
@@ -283,18 +284,19 @@ int sarif_remove_mean(ERS_Raw_Parser_Data_Patch *in)
 	return 0;
 }
 
-int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_Data_Patch *in)
+int sarif_range_compression(Sarif_Ctx *ctx, ERS_Raw_Parser_Data_Patch *in)
 {
 	ERS_Raw_Parser_Params *params;
 	double complex *aux_line;
 	double complex *f_aux_line;
 	double complex *f_corr_aux_line;
 	double complex *corr_aux_line;
+	double complex *ra_out;
 	int range;
 	fftw_plan p_forward, p_backward;
 
-	if(!ctx || !out || !in) {
-		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %p)\n", __func__, ctx, out, in);
+	if(!ctx) {
+		fprintf(stderr, "%s:: Invalid arguments (%p, %p)\n", __func__, ctx, in);
 		return -1;
 	}
 	if(!ctx->has_params || !ctx->has_ra_chirp) {
@@ -310,6 +312,8 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		ctx->ra_f_aux_line = f_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
 		ctx->ra_f_corr_aux_line = f_corr_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
 		ctx->ra_corr_aux_line = corr_aux_line =  calloc(1, sizeof(double complex) * params->ra_fft_len);
+		ctx->ra_out = ra_out = calloc(1, sizeof(double complex) * params->n_valid_samples * in->n_az); //1 patch
+
 		ctx->p_f_ra = p_forward = fftw_plan_dft_1d(params->ra_fft_len, (double (*)[2])aux_line, (double (*)[2])f_aux_line, FFTW_FORWARD, FFTW_MEASURE);
 		ctx->p_b_ra = p_backward = fftw_plan_dft_1d(params->ra_fft_len, (double (*)[2])f_corr_aux_line, (double (*)[2])corr_aux_line, FFTW_BACKWARD, FFTW_MEASURE);
 		ctx->has_fftw_ra_plan = 1;
@@ -318,6 +322,8 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		f_aux_line = ctx->ra_f_aux_line;
 		f_corr_aux_line = ctx->ra_f_corr_aux_line;
 		corr_aux_line = ctx->ra_corr_aux_line;
+		ra_out = ctx->ra_out;
+
 		p_forward = ctx->p_f_ra;
 		p_backward = ctx->p_b_ra;
 	}
@@ -351,7 +357,7 @@ int sarif_range_compression(Sarif_Ctx *ctx, double complex *out, ERS_Raw_Parser_
 		fftw_execute(p_backward);
 
 		//printf("IF\n");
-		memcpy(out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
+		memcpy(ra_out + (in->az_pos + i) * params->n_valid_samples, corr_aux_line, sizeof(double complex) * params->n_valid_samples);
 	}
 	printf("%s:: took %lld us\n", __func__, get_time_usec()-start);
 
@@ -399,14 +405,14 @@ double sarif_calc_doppler_centroid(double complex *in, Sarif_Doppler_Centroid_Al
 	return fc;
 }
 
-int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double complex *in)
+int sarif_azimuth_compression(Sarif_Ctx *ctx)
 {
 	ERS_Raw_Parser_Params *params;
 	double complex *f_in, *f_corr;
 	fftw_plan p_f, p_b;
 
-	if(!ctx || !out || !in) {
-		fprintf(stderr, "%s:: Invalid arguments (%p, %p, %p)\n", __func__, ctx, out, in);
+	if(!ctx) {
+		fprintf(stderr, "%s:: Invalid arguments (%p)\n", __func__, ctx);
 		return -1;
 	}
 	if(!ctx->has_params || !ctx->has_az_chirp || !ctx->rcmc_offset_matrix) {
@@ -450,7 +456,7 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 
 	//FFT in azimuth
 	long long start = get_time_usec();
-	memcpy(ctx->az_in, in, sizeof(double complex) * params->n_valid_samples * params->fft_lines);
+	memcpy(ctx->az_in, ctx->ra_out, sizeof(double complex) * params->n_valid_samples * params->fft_lines);
 	fftw_execute(p_f);
 	printf("%s:: FFT1 took %lld us\n", __func__, get_time_usec()-start);
 
@@ -485,6 +491,38 @@ int sarif_azimuth_compression(Sarif_Ctx *ctx, double complex **out, double compl
 	printf("%s:: IFFT took %lld us\n", __func__, get_time_usec()-start);
 	//Changed output, so multilook becomes incompatible
 	ctx->multilook_valid = 0;
+
+	return 0;
+}
+
+int sarif_get_range_compression_out(Sarif_Ctx *ctx, double complex **out)
+{
+	if(!ctx || !out) {
+		fprintf(stderr, "%s:: Invalid arguments %p\n", __func__, ctx);
+		return -1;
+	}
+
+	if(!ctx->ra_out) {
+		fprintf(stderr, "%s:: Error, previous steps missing! No output yet!\n", __func__);
+		return -1;
+	}
+
+	*out = ctx->ra_out;
+
+	return 0;
+}
+
+int sarif_get_slc_out(Sarif_Ctx *ctx, double complex **out)
+{
+	if(!ctx || !out) {
+		fprintf(stderr, "%s:: Invalid arguments %p\n", __func__, ctx);
+		return -1;
+	}
+
+	if(!ctx->az_out) {
+		fprintf(stderr, "%s:: Error, previous steps missing! No output yet!\n", __func__);
+		return -1;
+	}
 
 	*out = ctx->az_out;
 
